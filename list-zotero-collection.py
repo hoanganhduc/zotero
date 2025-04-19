@@ -1,63 +1,122 @@
 #!/usr/bin/env python3
-from pyzotero import zotero
+# Standard library imports
 import argparse
+import concurrent.futures
+import json
+import os
 import sys
 from datetime import datetime
-import os
-import concurrent.futures
-import pickle
-import os
-from googleapiclient.discovery import build
-from google_auth_oauthlib.flow import InstalledAppFlow
+
+# Third-party imports
 from google.auth.transport.requests import Request
+from google.oauth2 import service_account
+from google_auth_oauthlib.flow import InstalledAppFlow
+from googleapiclient.discovery import build
+from pyzotero import zotero
 
 # Google Drive API imports
-
-def authenticate_google_drive(username, app_password):
+# Remark: Create a service account in Google Console and share Zotero folder with the service account email. If you don't share it, you won't be able to access the files.
+def authenticate_google_drive(service_account_file):
     """
-    Authenticate to Google Drive using username and app password.
+    Authenticate to Google Drive using a service account.
     
     Args:
-        username (str): Google account username (email)
-        app_password (str): Google app password
+        service_account_file (str): Path to the service account key JSON file
         
     Returns:
         google.auth.credentials.Credentials: Google API credentials
     """
+    
     # Define the scopes required for Google Drive access
     SCOPES = ['https://www.googleapis.com/auth/drive.metadata.readonly']
     
     creds = None
-    # The file token.pickle stores the user's access and refresh tokens
-    token_file = f"token_{username.split('@')[0]}.pickle"
     
-    if os.path.exists(token_file):
-        with open(token_file, 'rb') as token:
-            creds = pickle.load(token)
-    
-    # If there are no valid credentials available, use the app password
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            # For first-time setup, you need credentials.json from Google Cloud Console
-            if not os.path.exists('credentials.json'):
-                print("Error: credentials.json file missing. Please download it from Google Cloud Console.")
-                return None
-                
-            flow = InstalledAppFlow.from_client_secrets_file(
-                'credentials.json', SCOPES)
-            print(f"Please sign in with your Google account: {username}")
-            print(f"Use your app password when prompted.")
-            creds = flow.run_local_server(port=0)
+    try:
+        # Authenticate using the service account key file
+        if not os.path.exists(service_account_file):
+            print(f"Error: Service account key file not found: {service_account_file}")
+            return None
             
-        # Save the credentials for the next run
-        with open(token_file, 'wb') as token:
-            pickle.dump(creds, token)
+        creds = service_account.Credentials.from_service_account_file(
+            service_account_file, scopes=SCOPES)
+            
+        # Get service account email for logging
+        service_info = {}
+        with open(service_account_file, 'r') as f:
+            service_info = json.load(f)
+        
+        service_email = service_info.get('client_email', 'unknown-service-account')
+        print(f"Authenticated as service account: {service_email}")
+            
+    except Exception as e:
+        print(f"Error authenticating with service account: {str(e)}")
+        return None
     
     return creds
 
-def search_file_in_drive(drive_service, query, max_results=10, folder_name=None):
+def test_google_drive_access(service_account_file, verbose=False):
+    """
+    Test access to Google Drive using a service account.
+    
+    Args:
+        service_account_file (str): Path to service account key JSON file
+        verbose (bool): Whether to display verbose output
+        
+    Returns:
+        tuple: (success, message) where success is a boolean indicating if the test was successful,
+                and message contains additional information
+    """
+    if verbose:
+        print(f"Testing Google Drive access using service account file: {service_account_file}")
+    
+    try:
+        # Authenticate to Google Drive using service account
+        creds = authenticate_google_drive(service_account_file)
+        if not creds:
+            return False, "Authentication failed. Please check your service account credentials."
+            
+        # Build the Drive API client
+        drive_service = build('drive', 'v3', credentials=creds)
+        
+        # Try to get account information and file count
+        about = drive_service.about().get(fields="user,storageQuota").execute()
+        files = drive_service.files().list(
+            pageSize=1, 
+            fields="files(id,name),nextPageToken"
+        ).execute()
+        
+        # Extract service account information
+        service_info = {}
+        with open(service_account_file, 'r') as f:
+            service_info = json.load(f)
+        
+        service_email = service_info.get('client_email', 'Unknown')
+        storage_used = int(about.get('storageQuota', {}).get('usage', 0)) / (1024 * 1024)  # Convert to MB
+        storage_total = int(about.get('storageQuota', {}).get('limit', 0)) / (1024 * 1024 * 1024)  # Convert to GB
+        
+        # Count files (this may take a while for large accounts, so we estimate)
+        file_count = "at least 1" if files.get('files') else "0"
+        if 'nextPageToken' in files:
+            file_count = "more than 100"  # Just an indication that there are many files
+            
+        # Format the success message
+        message = (
+            f"Successfully connected to Google Drive!\n"
+            f"Service Account: {service_email}\n"
+            f"Storage used: {storage_used:.2f} MB / {storage_total:.2f} GB\n"
+            f"Files: {file_count}"
+        )
+        
+        return True, message
+        
+    except Exception as e:
+        error_message = f"Error accessing Google Drive: {str(e)}"
+        if verbose:
+            print(error_message)
+        return False, error_message
+
+def search_file_in_drive(drive_service, query, max_results=10, folder_name=None, include_shared=True):
     """
     Search for files in Google Drive based on a query.
     
@@ -66,6 +125,7 @@ def search_file_in_drive(drive_service, query, max_results=10, folder_name=None)
         query (str): Search query string
         max_results (int): Maximum number of results to return
         folder_name (str, optional): Name of folder to search within (default: None, searches all of Drive)
+        include_shared (bool): Whether to include files shared with the user (default: True)
         
     Returns:
         list: List of file metadata matching the query
@@ -76,7 +136,7 @@ def search_file_in_drive(drive_service, query, max_results=10, folder_name=None)
     # If folder name is specified, find its ID and modify the query
     folder_id = None
     if folder_name:
-        # Search for the folder
+        # Search for the folder (include both owned and shared folders)
         folder_query = f"name = '{folder_name}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
         folder_response = drive_service.files().list(
             q=folder_query,
@@ -90,16 +150,38 @@ def search_file_in_drive(drive_service, query, max_results=10, folder_name=None)
             # Modify query to search within the specific folder
             query = f"{query} and '{folder_id}' in parents"
     
-    # Perform the search
+    # Search in both owned and shared files
     while True:
-        response = drive_service.files().list(
-            q=query,
-            spaces='drive',
-            fields='nextPageToken, files(id, name, webViewLink)',
-            pageToken=page_token,
-            pageSize=max_results).execute()
-            
+        search_params = {
+            'q': query,
+            'spaces': 'drive',
+            'fields': 'nextPageToken, files(id, name, webViewLink)',
+            'pageToken': page_token,
+            'pageSize': max_results
+        }
+        
+        response = drive_service.files().list(**search_params).execute()
         results.extend(response.get('files', []))
+        
+        # If we need to specifically search in shared files and we haven't reached max results
+        if include_shared and len(results) < max_results and not folder_id:
+            # Create a separate query for shared files
+            shared_query = f"{query} and sharedWithMe=true"
+            shared_response = drive_service.files().list(
+                q=shared_query,
+                spaces='drive',
+                fields='files(id, name, webViewLink)',
+                pageSize=max_results - len(results)
+            ).execute()
+            
+            # Add any unique shared files to results
+            shared_files = shared_response.get('files', [])
+            existing_ids = {file['id'] for file in results}
+            for file in shared_files:
+                if file['id'] not in existing_ids:
+                    results.append(file)
+                    existing_ids.add(file['id'])
+        
         page_token = response.get('nextPageToken', None)
         
         if page_token is None or len(results) >= max_results:
@@ -107,13 +189,12 @@ def search_file_in_drive(drive_service, query, max_results=10, folder_name=None)
             
     return results[:max_results]
 
-def get_drive_url_by_filename(username, app_password, filename, exact_match=True, folder_name=None, return_all=False, verbose=False):
+def get_drive_url_by_filename(service_account_file, filename, exact_match=True, folder_name=None, return_all=False, verbose=False):
     """
-    Find a file in Google Drive by name and return its URL.
+    Find a file in Google Drive by name and return its URL using a service account.
     
     Args:
-        username (str): Google account username
-        app_password (str): Google app password
+        service_account_file (str): Path to the service account key JSON file
         filename (str): Name of the file to search for
         exact_match (bool): If True, match exact filename, otherwise partial match
         folder_name (str, optional): Name of folder to search within (None searches all of Drive)
@@ -125,10 +206,10 @@ def get_drive_url_by_filename(username, app_password, filename, exact_match=True
     """
     try:
         if verbose:
-            print(f"Searching for file: {filename} in Google Drive")
+            print(f"Searching for file: {filename} in Google Drive using service account")
             
-        # Authenticate to Google Drive
-        creds = authenticate_google_drive(username, app_password)
+        # Authenticate to Google Drive using service account
+        creds = authenticate_google_drive(service_account_file)
         if not creds:
             if verbose:
                 print("Authentication failed")
@@ -224,15 +305,14 @@ def get_items(zot, collection=None, item_type=None, verbose=True):
     
     return filtered_items
 
-def get_attachment_paths(zot, item, google_username=None, google_app_password=None, verbose=False):
+def get_attachment_paths(zot, item, service_account_file=None, verbose=False):
     """
     Get PDF or DJVU attachment paths for a given item and their Google Drive URLs if available.
     
     Args:
         zot: Zotero API client instance
         item: Zotero item to get attachments for
-        google_username (str, optional): Google account username for Drive search
-        google_app_password (str, optional): Google app password for authentication
+        service_account_file (str, optional): Path to the service account key JSON file for Google Drive
         verbose (bool): Whether to display progress messages
     
     Returns:
@@ -263,15 +343,14 @@ def get_attachment_paths(zot, item, google_username=None, google_app_password=No
                     # Initialize with local path only
                     info = {'local_path': local_path, 'drive_url': None}
                     
-                    # If Google credentials are provided, search in Drive
-                    if google_username and google_app_password:
+                    # If service account file is provided, search in Drive
+                    if service_account_file:
                         if verbose:
                             print_progress(f"Searching for {filename} in Google Drive", verbose)
                         try:
-                            # Search specifically in the Zotero folder
+                            # Search using service account
                             drive_url = get_drive_url_by_filename(
-                                google_username, 
-                                google_app_password, 
+                                service_account_file, 
                                 filename, 
                                 exact_match=True,
                                 folder_name=None, 
@@ -289,7 +368,7 @@ def get_attachment_paths(zot, item, google_username=None, google_app_password=No
     
     return attachment_info
 
-def format_item_text(item, zot, google_username=None, google_app_password=None, verbose=False):
+def format_item_text(item, zot, service_account_file=None, verbose=False):
     """Format a single item for text output."""
     output = []
     output.append(f"Title: {item['data'].get('title', 'Unknown')}")
@@ -331,7 +410,7 @@ def format_item_text(item, zot, google_username=None, google_app_password=None, 
             output.append(f"DOI: {item['data']['DOI']}")
     
     # Add attachment paths and Google Drive URLs
-    attachments = get_attachment_paths(zot, item, google_username, google_app_password, verbose)
+    attachments = get_attachment_paths(zot, item, service_account_file, verbose)
     if attachments:
         output.append("Attachments:")
         for attachment in attachments:
@@ -345,7 +424,7 @@ def format_item_text(item, zot, google_username=None, google_app_password=None, 
     
     return "\n".join(output)
 
-def format_item_html(item, zot, google_username=None, google_app_password=None, verbose=False):
+def format_item_html(item, zot, service_account_file=None, verbose=False):
     """Format a single item for HTML output."""
     html = [f"<div class='item {item['data'].get('itemType', '')}'>"
             f"<h2>{item['data'].get('title', 'Unknown')}</h2>"]
@@ -388,7 +467,7 @@ def format_item_html(item, zot, google_username=None, google_app_password=None, 
             html.append(f"<p><strong>DOI:</strong> {item['data']['DOI']}</p>")
     
     # Add attachment paths with Google Drive links
-    attachments = get_attachment_paths(zot, item, google_username, google_app_password, verbose)
+    attachments = get_attachment_paths(zot, item, service_account_file, verbose)
     if attachments:
         html.append("<p><strong>Attachments:</strong></p>")
         html.append("<ul>")
@@ -405,7 +484,7 @@ def format_item_html(item, zot, google_username=None, google_app_password=None, 
     html.append("</div>")
     return "\n".join(html)
 
-def generate_text_output(items, zot, collection_name=None, google_username=None, google_app_password=None, verbose=False):
+def generate_text_output(items, zot, collection_name=None, service_account_file=None, verbose=False):
     """Generate complete text document from items."""
     
     if verbose:
@@ -429,7 +508,7 @@ def generate_text_output(items, zot, collection_name=None, google_username=None,
     def format_single_item(idx, item):
         try:
             item_header = f"{collection_name} #{idx+1}"
-            item_content = format_item_text(item, zot, google_username, google_app_password, verbose)
+            item_content = format_item_text(item, zot, service_account_file, verbose)
             return f"{item_header}\n{item_content}\n---"
         except Exception as e:
             error_msg = f"Error formatting item {idx+1}: {e}"
@@ -470,7 +549,7 @@ def generate_text_output(items, zot, collection_name=None, google_username=None,
         
     return "\n".join(header + ordered_items)
 
-def generate_html_output(items, zot, collection_name=None, google_username=None, google_app_password=None, verbose=False):
+def generate_html_output(items, zot, collection_name=None, service_account_file=None, verbose=False):
     """Generate complete HTML document from items."""
     if verbose:
         print_progress("Starting HTML output generation", verbose)
@@ -513,7 +592,7 @@ def generate_html_output(items, zot, collection_name=None, google_username=None,
     def format_single_item(idx, item):
         try:
             item_number = f"<div class='item-number'>{collection_name} #{idx+1}</div>"
-            item_content = format_item_html(item, zot, google_username, google_app_password, verbose)
+            item_content = format_item_html(item, zot, service_account_file, verbose)
             return item_number + "\n" + item_content
         except Exception as e:
             error_msg = f"Error formatting item {idx+1}: {e}"
@@ -646,7 +725,7 @@ def display_collections(collections, output_format, output_file=None, verbose=Fa
     
     print_progress("Collection display complete", verbose)
 
-def display_items(items, output_format, output_file=None, collection_name=None, zot=None, verbose=False, google_username=None, google_app_password=None):
+def display_items(items, output_format, output_file=None, collection_name=None, zot=None, verbose=False, service_account_file=None):
     """Display items in the specified format."""
     if not items:
         print("No items found.")
@@ -656,7 +735,7 @@ def display_items(items, output_format, output_file=None, collection_name=None, 
     
     if output_format == 'text':
         print_progress("Generating text output...", verbose)
-        text_content = generate_text_output(items, zot, collection_name, google_username, google_app_password, verbose)
+        text_content = generate_text_output(items, zot, collection_name, service_account_file, verbose)
         if output_file:
             print_progress(f"Saving text output to {output_file}", verbose)
             with open(output_file, 'w') as f:
@@ -667,7 +746,7 @@ def display_items(items, output_format, output_file=None, collection_name=None, 
             print(text_content)
     elif output_format == 'html':
         print_progress("Generating HTML output...", verbose)
-        html_content = generate_html_output(items, zot, collection_name, google_username, google_app_password, verbose)
+        html_content = generate_html_output(items, zot, collection_name, service_account_file, verbose)
         if output_file:
             print_progress(f"Saving HTML output to {output_file}", verbose)
             with open(output_file, 'w') as f:
@@ -678,7 +757,7 @@ def display_items(items, output_format, output_file=None, collection_name=None, 
             print(html_content)
     elif output_format == 'pdf':
         print_progress("Generating PDF output...", verbose)
-        html_content = generate_html_output(items, zot, collection_name, google_username, google_app_password, verbose)
+        html_content = generate_html_output(items, zot, collection_name, service_account_file, verbose)
         if not output_file:
             output_file = "zotero_items.pdf"
             print_progress(f"No output file specified, using default: {output_file}", verbose)
@@ -703,8 +782,8 @@ def parse_arguments():
     parser.add_argument('--output-file', help='Output file name (for html and pdf)')
     parser.add_argument('--verbose', action='store_true', 
                         help='Display progress information during execution')
-    parser.add_argument('--google-username', help='Google account username for Drive integration')
-    parser.add_argument('--google-app-password', help='Google app password for Drive integration')
+    parser.add_argument('--service-account-file', 
+                        help='Path to Google service account JSON file for Drive integration')
     
     return parser.parse_args()
 
@@ -731,7 +810,7 @@ def get_collection_name(zot, collection_id, verbose):
     return collection_name
 
 def handle_item_listing(zot, collection_id, item_type, output_format, output_file, verbose, 
-                       google_username=None, google_app_password=None):
+                       service_account_file=None):
     """Handle the workflow for listing items."""
     print_progress("Fetching items...", verbose)
     items = get_items(zot, collection_id, item_type, verbose)
@@ -742,7 +821,7 @@ def handle_item_listing(zot, collection_id, item_type, output_format, output_fil
     
     print_progress(f"Generating {output_format} output...", verbose)
     display_items(items, output_format, output_file, collection_name, zot, verbose, 
-                 google_username, google_app_password)
+                 service_account_file)
     print_progress("Output generation complete", verbose)
 
 def main():
@@ -754,6 +833,24 @@ def main():
         print_progress("Connecting to Zotero...", args.verbose)
         zot = connect_to_zotero(args.library_id, args.library_type, args.api_key)
         print_progress("Connection established successfully", args.verbose)
+
+        # Test Google Drive access if service account file was provided
+        if args.service_account_file:
+            print_progress("Testing Google Drive access with service account...", args.verbose)
+            success, message = test_google_drive_access(
+                args.service_account_file, 
+                verbose=args.verbose
+            )
+            
+            if success:
+                print_progress("Google Drive access verified successfully!", args.verbose)
+                print_progress(message, args.verbose)
+            else:
+                print_progress("Google Drive access failed!", args.verbose, level=3, file=sys.stderr)
+                print_progress(message, args.verbose, file=sys.stderr)
+                print_progress("The script will continue, but Google Drive links won't be available.", args.verbose)
+        else:
+            print_progress("No Google Drive service account file provided. Google Drive integration will be disabled.", args.verbose)
         
         # List collections or items
         if args.list_collections:
@@ -761,7 +858,7 @@ def main():
         else:
             handle_item_listing(zot, args.collection, args.item_type, 
                                args.output_format, args.output_file, args.verbose,
-                               args.google_username, args.google_app_password)
+                               args.service_account_file)
     
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
