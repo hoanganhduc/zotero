@@ -12,8 +12,6 @@ from datetime import datetime
 
 # Third-party imports
 import pdfkit
-import xhtml2pdf
-from xhtml2pdf import pisa
 from google.auth.transport.requests import Request
 from google.oauth2 import service_account
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -917,49 +915,20 @@ def generate_html_output(items, zot, collection_name=None, google_creds=None, ve
     
     return "\n".join(html_parts)
 
-# For PDF generation
-try:
-    PDF_GENERATOR_AVAILABLE = True
-    PDF_GENERATOR_NAME = "pdfkit"
-except ImportError:
-    try:
-        PDF_GENERATOR_AVAILABLE = True
-        PDF_GENERATOR_NAME = "xhtml2pdf"
-    except ImportError:
-        PDF_GENERATOR_AVAILABLE = False
-        PDF_GENERATOR_NAME = None
-
 def generate_pdf_output(html_content, output_file, verbose=False):
-    """Generate PDF from HTML content using pdfkit or xhtml2pdf as fallback."""
-    if not PDF_GENERATOR_AVAILABLE:
-        print("Error: No PDF generation library available. Cannot generate PDF.", file=sys.stderr)
-        print("Please install either pdfkit or xhtml2pdf:", file=sys.stderr)
-        print("  pip install pdfkit  # Recommended (requires wkhtmltopdf binary)", file=sys.stderr)
-        print("  pip install xhtml2pdf  # Pure Python alternative", file=sys.stderr)
-        sys.exit(1)
-    
+    """Generate PDF from HTML content using pdfkit."""
     if verbose:
         print_progress("Starting PDF generation...", verbose)
         html_size_kb = len(html_content) / 1024
-        print_progress(f"Using {PDF_GENERATOR_NAME} to process approximately {html_size_kb:.1f} KB of HTML content", verbose)
+        print_progress(f"Using pdfkit to process approximately {html_size_kb:.1f} KB of HTML content", verbose)
     
     try:
-        # Generate the PDF based on available library
-        if PDF_GENERATOR_NAME == "pdfkit":
-            # Configure pdfkit options if needed
-            options = {
-                'quiet': not verbose,
-                'encoding': "UTF-8",
-            }
-            pdfkit.from_string(html_content, output_file, options=options)
-        else:  # xhtml2pdf
-            with open(output_file, "wb") as pdf_file:
-                pisa_status = pisa.CreatePDF(
-                    html_content,
-                    dest=pdf_file
-                )
-            if pisa_status.err:
-                raise Exception("xhtml2pdf encountered errors during conversion")
+        # Configure pdfkit options
+        options = {
+            'quiet': not verbose,
+            'encoding': "UTF-8",
+        }
+        pdfkit.from_string(html_content, output_file, options=options)
         
         # Get the file size of the generated PDF
         if os.path.exists(output_file):
@@ -969,7 +938,7 @@ def generate_pdf_output(html_content, output_file, verbose=False):
             print_progress("PDF generation seemed to complete but output file not found", verbose, file=sys.stderr)
     
     except Exception as e:
-        print_progress(f"Error generating PDF with {PDF_GENERATOR_NAME}: {str(e)}", verbose, file=sys.stderr)
+        print_progress(f"Error generating PDF with pdfkit: {str(e)}", verbose, file=sys.stderr)
         sys.exit(1)
 
 def display_collections(collections, output_format, output_file=None, verbose=False):
