@@ -1,5 +1,4 @@
-google_api_python_client==2.83.0
-google_auth_oauthlib==1.2.1
-pdfkit==1.0.0
-protobuf==4.21.12
-pyzotero==1.5.1
+google_api_python_client
+google_auth_oauthlib
+pdfkit
+pyzotero
