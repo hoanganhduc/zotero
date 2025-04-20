@@ -8,11 +8,15 @@ import sys
 from datetime import datetime
 
 # Third-party imports
+import pdfkit
+import xhtml2pdf
+from xhtml2pdf import pisa
 from google.auth.transport.requests import Request
 from google.oauth2 import service_account
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from pyzotero import zotero
+import html
 
 # Google Drive API imports
 # Remark: Create a service account in Google Console and share Zotero folder with the service account email. If you don't share it, you won't be able to access the files.
@@ -55,12 +59,12 @@ def authenticate_google_drive(service_account_file):
     
     return creds
 
-def test_google_drive_access(service_account_file, verbose=False):
+def test_google_drive_access(google_creds, verbose=False):
     """
-    Test access to Google Drive using a service account.
+    Test access to Google Drive using Google credentials.
     
     Args:
-        service_account_file (str): Path to service account key JSON file
+        google_creds: Google API credentials object
         verbose (bool): Whether to display verbose output
         
     Returns:
@@ -68,16 +72,14 @@ def test_google_drive_access(service_account_file, verbose=False):
                 and message contains additional information
     """
     if verbose:
-        print(f"Testing Google Drive access using service account file: {service_account_file}")
+        print("Testing Google Drive access using provided credentials")
     
     try:
-        # Authenticate to Google Drive using service account
-        creds = authenticate_google_drive(service_account_file)
-        if not creds:
-            return False, "Authentication failed. Please check your service account credentials."
+        if not google_creds:
+            return False, "No credentials provided. Authentication failed."
             
         # Build the Drive API client
-        drive_service = build('drive', 'v3', credentials=creds)
+        drive_service = build('drive', 'v3', credentials=google_creds)
         
         # Try to get account information and file count
         about = drive_service.about().get(fields="user,storageQuota").execute()
@@ -86,12 +88,13 @@ def test_google_drive_access(service_account_file, verbose=False):
             fields="files(id,name),nextPageToken"
         ).execute()
         
-        # Extract service account information
-        service_info = {}
-        with open(service_account_file, 'r') as f:
-            service_info = json.load(f)
+        # Get service account email from credentials or user info
+        service_email = 'Unknown'
+        if hasattr(google_creds, 'service_account_email'):
+            service_email = google_creds.service_account_email
+        elif 'user' in about and 'emailAddress' in about['user']:
+            service_email = about['user']['emailAddress']
         
-        service_email = service_info.get('client_email', 'Unknown')
         storage_used = int(about.get('storageQuota', {}).get('usage', 0)) / (1024 * 1024)  # Convert to MB
         storage_total = int(about.get('storageQuota', {}).get('limit', 0)) / (1024 * 1024 * 1024)  # Convert to GB
         
@@ -189,12 +192,12 @@ def search_file_in_drive(drive_service, query, max_results=10, folder_name=None,
             
     return results[:max_results]
 
-def get_drive_url_by_filename(service_account_file, filename, exact_match=True, folder_name=None, return_all=False, verbose=False):
+def get_drive_url_by_filename(google_creds, filename, exact_match=True, folder_name=None, return_all=False, verbose=False):
     """
-    Find a file in Google Drive by name and return its URL using a service account.
+    Find a file in Google Drive by name and return its URL using provided Google credentials.
     
     Args:
-        service_account_file (str): Path to the service account key JSON file
+        google_creds: Already authenticated Google credentials object
         filename (str): Name of the file to search for
         exact_match (bool): If True, match exact filename, otherwise partial match
         folder_name (str, optional): Name of folder to search within (None searches all of Drive)
@@ -206,17 +209,16 @@ def get_drive_url_by_filename(service_account_file, filename, exact_match=True, 
     """
     try:
         if verbose:
-            print(f"Searching for file: {filename} in Google Drive using service account")
+            print(f"Searching for file: {filename} in Google Drive")
             
-        # Authenticate to Google Drive using service account
-        creds = authenticate_google_drive(service_account_file)
-        if not creds:
+        # Check if credentials are valid
+        if not google_creds:
             if verbose:
-                print("Authentication failed")
+                print("No valid Google credentials provided")
             return None
             
         # Build the Drive API client
-        drive_service = build('drive', 'v3', credentials=creds)
+        drive_service = build('drive', 'v3', credentials=google_creds)
         
         # Escape single quotes in filename for query
         safe_filename = filename.replace("'", "\\'")
@@ -244,13 +246,6 @@ def get_drive_url_by_filename(service_account_file, filename, exact_match=True, 
     except Exception as e:
         print(f"Error accessing Google Drive: {str(e)}", file=sys.stderr)
         return None
-
-# For PDF generation
-try:
-    from weasyprint import HTML
-    WEASYPRINT_AVAILABLE = True
-except ImportError:
-    WEASYPRINT_AVAILABLE = False
 
 def print_progress(message, verbose=True, level=1, file=sys.stdout):
     """
@@ -305,14 +300,14 @@ def get_items(zot, collection=None, item_type=None, verbose=True):
     
     return filtered_items
 
-def get_attachment_paths(zot, item, service_account_file=None, verbose=False):
+def get_attachment_paths(zot, item, google_creds=None, verbose=False):
     """
-    Get PDF or DJVU attachment paths for a given item and their Google Drive URLs if available.
+    Get PDF, DJVU, MP4, PPT, PPTX attachment paths for a given item and their Google Drive URLs if available.
     
     Args:
         zot: Zotero API client instance
         item: Zotero item to get attachments for
-        service_account_file (str, optional): Path to the service account key JSON file for Google Drive
+        google_creds: Google API credentials object (already authenticated)
         verbose (bool): Whether to display progress messages
     
     Returns:
@@ -330,10 +325,16 @@ def get_attachment_paths(zot, item, service_account_file=None, verbose=False):
     
     attachment_info = []
     for attachment in attachments:
-        # Check if it's a PDF or DJVU attachment
+        # Check if it's an attachment of supported type
         if attachment['data'].get('itemType') == 'attachment' and 'contentType' in attachment['data']:
             content_type = attachment['data']['contentType']
-            if content_type in ['application/pdf', 'image/vnd.djvu']:
+            if content_type in [
+                'application/pdf', 
+                'image/vnd.djvu',
+                'video/mp4',
+                'application/vnd.ms-powerpoint',
+                'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+            ]:
                 # Get the file information
                 if 'key' in attachment and 'filename' in attachment['data']:
                     attachment_id = attachment['key']
@@ -343,14 +344,14 @@ def get_attachment_paths(zot, item, service_account_file=None, verbose=False):
                     # Initialize with local path only
                     info = {'local_path': local_path, 'drive_url': None}
                     
-                    # If service account file is provided, search in Drive
-                    if service_account_file:
+                    # If Google credentials are provided, search in Drive
+                    if google_creds:
                         if verbose:
                             print_progress(f"Searching for {filename} in Google Drive", verbose)
                         try:
-                            # Search using service account
+                            # Search using Google credentials
                             drive_url = get_drive_url_by_filename(
-                                service_account_file, 
+                                google_creds, 
                                 filename, 
                                 exact_match=True,
                                 folder_name=None, 
@@ -368,9 +369,10 @@ def get_attachment_paths(zot, item, service_account_file=None, verbose=False):
     
     return attachment_info
 
-def format_item_text(item, zot, service_account_file=None, verbose=False):
-    """Format a single item for text output."""
+def format_item_text(item, zot, google_creds=None, verbose=False):
+    """Format a single item for text output with proper Unicode support."""
     output = []
+    # Use Unicode strings for all text content
     output.append(f"Title: {item['data'].get('title', 'Unknown')}")
     output.append(f"Type: {item['data'].get('itemType', 'Unknown')}")
     
@@ -410,7 +412,7 @@ def format_item_text(item, zot, service_account_file=None, verbose=False):
             output.append(f"DOI: {item['data']['DOI']}")
     
     # Add attachment paths and Google Drive URLs
-    attachments = get_attachment_paths(zot, item, service_account_file, verbose)
+    attachments = get_attachment_paths(zot, item, google_creds, verbose)
     if attachments:
         output.append("Attachments:")
         for attachment in attachments:
@@ -422,70 +424,74 @@ def format_item_text(item, zot, service_account_file=None, verbose=False):
             else:
                 output.append(f"  - {local_path}")
     
+    # Join all lines with Unicode newlines and ensure the result is Unicode
     return "\n".join(output)
 
-def format_item_html(item, zot, service_account_file=None, verbose=False):
+def format_item_html(item, zot, google_creds=None, verbose=False):
     """Format a single item for HTML output."""
-    html = [f"<div class='item {item['data'].get('itemType', '')}'>"
-            f"<h2>{item['data'].get('title', 'Unknown')}</h2>"]
+    # Use html.escape for all text content to handle Unicode properly
     
-    html.append(f"<p><strong>Type:</strong> {item['data'].get('itemType', 'Unknown')}</p>")
+    # Start with basic item info
+    html_parts = [f"<div class='item {html.escape(item['data'].get('itemType', ''))}'>"
+            f"<h2>{html.escape(item['data'].get('title', 'Unknown'))}</h2>"]
+    
+    html_parts.append(f"<p><strong>Type:</strong> {html.escape(item['data'].get('itemType', 'Unknown'))}</p>")
     
     # Format authors
     if 'creators' in item['data'] and item['data']['creators']:
         authors = []
         for creator in item['data']['creators']:
             if 'lastName' in creator and 'firstName' in creator:
-                authors.append(f"{creator['lastName']}, {creator['firstName']}")
+                authors.append(f"{html.escape(creator['lastName'])}, {html.escape(creator['firstName'])}")
             elif 'name' in creator:
-                authors.append(creator['name'])
+                authors.append(html.escape(creator['name']))
         if authors:
-            html.append(f"<p><strong>Authors:</strong> {'; '.join(authors)}</p>")
+            html_parts.append(f"<p><strong>Authors:</strong> {html.escape('; '.join(authors))}</p>")
     
     if 'date' in item['data'] and item['data']['date']:
-        html.append(f"<p><strong>Date:</strong> {item['data']['date']}</p>")
+        html_parts.append(f"<p><strong>Date:</strong> {html.escape(item['data']['date'])}</p>")
     
     # Type-specific fields
     item_type = item['data'].get('itemType')
     if item_type == 'book':
         if 'publisher' in item['data'] and item['data']['publisher']:
-            html.append(f"<p><strong>Publisher:</strong> {item['data']['publisher']}</p>")
+            html_parts.append(f"<p><strong>Publisher:</strong> {html.escape(item['data']['publisher'])}</p>")
         if 'place' in item['data'] and item['data']['place']:
-            html.append(f"<p><strong>Place:</strong> {item['data']['place']}</p>")
+            html_parts.append(f"<p><strong>Place:</strong> {html.escape(item['data']['place'])}</p>")
         if 'ISBN' in item['data'] and item['data']['ISBN']:
-            html.append(f"<p><strong>ISBN:</strong> {item['data']['ISBN']}</p>")
+            html_parts.append(f"<p><strong>ISBN:</strong> {html.escape(item['data']['ISBN'])}</p>")
     elif item_type == 'journalArticle':
         if 'publicationTitle' in item['data'] and item['data']['publicationTitle']:
-            html.append(f"<p><strong>Journal:</strong> {item['data']['publicationTitle']}</p>")
+            html_parts.append(f"<p><strong>Journal:</strong> {html.escape(item['data']['publicationTitle'])}</p>")
         if 'volume' in item['data'] and item['data']['volume']:
-            html.append(f"<p><strong>Volume:</strong> {item['data']['volume']}</p>")
+            html_parts.append(f"<p><strong>Volume:</strong> {html.escape(item['data']['volume'])}</p>")
         if 'issue' in item['data'] and item['data']['issue']:
-            html.append(f"<p><strong>Issue:</strong> {item['data']['issue']}</p>")
+            html_parts.append(f"<p><strong>Issue:</strong> {html.escape(item['data']['issue'])}</p>")
         if 'pages' in item['data'] and item['data']['pages']:
-            html.append(f"<p><strong>Pages:</strong> {item['data']['pages']}</p>")
+            html_parts.append(f"<p><strong>Pages:</strong> {html.escape(item['data']['pages'])}</p>")
         if 'DOI' in item['data'] and item['data']['DOI']:
-            html.append(f"<p><strong>DOI:</strong> {item['data']['DOI']}</p>")
+            html_parts.append(f"<p><strong>DOI:</strong> {html.escape(item['data']['DOI'])}</p>")
     
     # Add attachment paths with Google Drive links
-    attachments = get_attachment_paths(zot, item, service_account_file, verbose)
+    attachments = get_attachment_paths(zot, item, google_creds, verbose)
     if attachments:
-        html.append("<p><strong>Attachments:</strong></p>")
-        html.append("<ul>")
+        html_parts.append("<p><strong>Attachments:</strong></p>")
+        html_parts.append("<ul>")
         for attachment in attachments:
-            local_path = attachment.get('local_path', 'Unknown')
+            local_path = html.escape(attachment.get('local_path', 'Unknown'))
             drive_url = attachment.get('drive_url')
             
             if drive_url:
-                html.append(f"<li>{local_path} - <a href='{drive_url}' target='_blank'>View on Google Drive</a></li>")
+                html_parts.append(f"<li>{local_path} - <a href='{html.escape(drive_url)}' target='_blank'>View on Google Drive</a></li>")
             else:
-                html.append(f"<li>{local_path}</li>")
-        html.append("</ul>")
+                html_parts.append(f"<li>{local_path}</li>")
+        html_parts.append("</ul>")
     
-    html.append("</div>")
-    return "\n".join(html)
+    html_parts.append("</div>")
+    return "\n".join(html_parts)
 
-def generate_text_output(items, zot, collection_name=None, service_account_file=None, verbose=False):
-    """Generate complete text document from items."""
+def generate_text_output(items, zot, collection_name=None, google_creds=None, verbose=False):
+    """Generate complete text document from items with proper Unicode support."""
     
     if verbose:
         print_progress("Starting text output generation", verbose)
@@ -508,7 +514,7 @@ def generate_text_output(items, zot, collection_name=None, service_account_file=
     def format_single_item(idx, item):
         try:
             item_header = f"{collection_name} #{idx+1}"
-            item_content = format_item_text(item, zot, service_account_file, verbose)
+            item_content = format_item_text(item, zot, google_creds, verbose)
             return f"{item_header}\n{item_content}\n---"
         except Exception as e:
             error_msg = f"Error formatting item {idx+1}: {e}"
@@ -546,10 +552,11 @@ def generate_text_output(items, zot, collection_name=None, service_account_file=
     
     if verbose:
         print_progress("Text output generation complete", verbose)
-        
+    
+    # Ensure Unicode output    
     return "\n".join(header + ordered_items)
 
-def generate_html_output(items, zot, collection_name=None, service_account_file=None, verbose=False):
+def generate_html_output(items, zot, collection_name=None, google_creds=None, verbose=False):
     """Generate complete HTML document from items."""
     if verbose:
         print_progress("Starting HTML output generation", verbose)
@@ -582,7 +589,7 @@ def generate_html_output(items, zot, collection_name=None, service_account_file=
         "</a>",
         "</div>",
         f"<h1>{title}</h1>",
-        "<div class='notice'>This list is created from a Zotero collection of <a href='https://hoanganhduc.github.io/'>Duc A. Hoang</a>. Please note that access to Google Drive URLs is restricted.</div>"
+        "<div class='notice'>This page is created from a Zotero collection of <a href='https://hoanganhduc.github.io/'>Duc A. Hoang</a>. Materials listed have been gathered from various sources. Please note that access to these materials via Google Drive is restricted due to possible copyright issues.</div>"
     ]
     
     if verbose:
@@ -592,7 +599,7 @@ def generate_html_output(items, zot, collection_name=None, service_account_file=
     def format_single_item(idx, item):
         try:
             item_number = f"<div class='item-number'>{collection_name} #{idx+1}</div>"
-            item_content = format_item_html(item, zot, service_account_file, verbose)
+            item_content = format_item_html(item, zot, google_creds, verbose)
             return item_number + "\n" + item_content
         except Exception as e:
             error_msg = f"Error formatting item {idx+1}: {e}"
@@ -637,30 +644,59 @@ def generate_html_output(items, zot, collection_name=None, service_account_file=
     
     return "\n".join(html)
 
+# For PDF generation
+try:
+    PDF_GENERATOR_AVAILABLE = True
+    PDF_GENERATOR_NAME = "pdfkit"
+except ImportError:
+    try:
+        PDF_GENERATOR_AVAILABLE = True
+        PDF_GENERATOR_NAME = "xhtml2pdf"
+    except ImportError:
+        PDF_GENERATOR_AVAILABLE = False
+        PDF_GENERATOR_NAME = None
+
 def generate_pdf_output(html_content, output_file, verbose=False):
-    """Generate PDF from HTML content with improved error handling."""
-    if not WEASYPRINT_AVAILABLE:
-        print("Error: WeasyPrint library not available. Cannot generate PDF.", file=sys.stderr)
-        print("Please install it with: pip install weasyprint", file=sys.stderr)
+    """Generate PDF from HTML content using pdfkit or xhtml2pdf as fallback."""
+    if not PDF_GENERATOR_AVAILABLE:
+        print("Error: No PDF generation library available. Cannot generate PDF.", file=sys.stderr)
+        print("Please install either pdfkit or xhtml2pdf:", file=sys.stderr)
+        print("  pip install pdfkit  # Recommended (requires wkhtmltopdf binary)", file=sys.stderr)
+        print("  pip install xhtml2pdf  # Pure Python alternative", file=sys.stderr)
         sys.exit(1)
     
     if verbose:
         print_progress("Starting PDF generation...", verbose)
-        # Provide an estimate of the size of the HTML content
         html_size_kb = len(html_content) / 1024
-        print_progress(f"Processing approximately {html_size_kb:.1f} KB of HTML content", verbose)
+        print_progress(f"Using {PDF_GENERATOR_NAME} to process approximately {html_size_kb:.1f} KB of HTML content", verbose)
     
     try:
-        # Generate the PDF
-        HTML(string=html_content).write_pdf(output_file)
+        # Generate the PDF based on available library
+        if PDF_GENERATOR_NAME == "pdfkit":
+            # Configure pdfkit options if needed
+            options = {
+                'quiet': not verbose,
+                'encoding': "UTF-8",
+            }
+            pdfkit.from_string(html_content, output_file, options=options)
+        else:  # xhtml2pdf
+            with open(output_file, "wb") as pdf_file:
+                pisa_status = pisa.CreatePDF(
+                    html_content,
+                    dest=pdf_file
+                )
+            if pisa_status.err:
+                raise Exception("xhtml2pdf encountered errors during conversion")
         
-        if verbose:
-            # Get the file size of the generated PDF
+        # Get the file size of the generated PDF
+        if os.path.exists(output_file):
             pdf_size_kb = os.path.getsize(output_file) / 1024
             print_progress(f"PDF successfully generated ({pdf_size_kb:.1f} KB) and saved to {output_file}", verbose)
+        else:
+            print_progress("PDF generation seemed to complete but output file not found", verbose, file=sys.stderr)
     
     except Exception as e:
-        print_progress(f"Error generating PDF: {str(e)}", verbose, file=sys.stderr)
+        print_progress(f"Error generating PDF with {PDF_GENERATOR_NAME}: {str(e)}", verbose, file=sys.stderr)
         sys.exit(1)
 
 def display_collections(collections, output_format, output_file=None, verbose=False):
@@ -710,7 +746,7 @@ def display_collections(collections, output_format, output_file=None, verbose=Fa
         if output_format == 'html':
             if output_file:
                 print_progress(f"Saving HTML output to {output_file}", verbose)
-                with open(output_file, 'w') as f:
+                with open(output_file, 'w', encoding='utf-8') as f:
                     f.write(html_content)
                 print(f"HTML output saved to {output_file}")
             else:
@@ -725,7 +761,7 @@ def display_collections(collections, output_format, output_file=None, verbose=Fa
     
     print_progress("Collection display complete", verbose)
 
-def display_items(items, output_format, output_file=None, collection_name=None, zot=None, verbose=False, service_account_file=None):
+def display_items(items, output_format, output_file=None, collection_name=None, zot=None, verbose=False, google_creds=None):
     """Display items in the specified format."""
     if not items:
         print("No items found.")
@@ -735,10 +771,10 @@ def display_items(items, output_format, output_file=None, collection_name=None, 
     
     if output_format == 'text':
         print_progress("Generating text output...", verbose)
-        text_content = generate_text_output(items, zot, collection_name, service_account_file, verbose)
+        text_content = generate_text_output(items, zot, collection_name, google_creds, verbose)
         if output_file:
             print_progress(f"Saving text output to {output_file}", verbose)
-            with open(output_file, 'w') as f:
+            with open(output_file, 'w', encoding='utf-8') as f:
                 f.write(text_content)
             print(f"Text output saved to {output_file}")
         else:
@@ -746,10 +782,10 @@ def display_items(items, output_format, output_file=None, collection_name=None, 
             print(text_content)
     elif output_format == 'html':
         print_progress("Generating HTML output...", verbose)
-        html_content = generate_html_output(items, zot, collection_name, service_account_file, verbose)
+        html_content = generate_html_output(items, zot, collection_name, google_creds, verbose)
         if output_file:
             print_progress(f"Saving HTML output to {output_file}", verbose)
-            with open(output_file, 'w') as f:
+            with open(output_file, 'w', encoding='utf-8') as f:
                 f.write(html_content)
             print(f"HTML output saved to {output_file}")
         else:
@@ -757,7 +793,7 @@ def display_items(items, output_format, output_file=None, collection_name=None, 
             print(html_content)
     elif output_format == 'pdf':
         print_progress("Generating PDF output...", verbose)
-        html_content = generate_html_output(items, zot, collection_name, service_account_file, verbose)
+        html_content = generate_html_output(items, zot, collection_name, google_creds, verbose)
         if not output_file:
             output_file = "zotero_items.pdf"
             print_progress(f"No output file specified, using default: {output_file}", verbose)
@@ -769,20 +805,20 @@ def display_items(items, output_format, output_file=None, collection_name=None, 
 def parse_arguments():
     """Parse and return command line arguments."""
     parser = argparse.ArgumentParser(description='List items from a Zotero collection.')
-    parser.add_argument('--api-key', required=True, help='Your Zotero API key')
-    parser.add_argument('--library-type', choices=['user', 'group'], default='user',
+    parser.add_argument('-k', '--api-key', required=True, help='Your Zotero API key')
+    parser.add_argument('-t', '--library-type', choices=['user', 'group'], default='user',
                         help='Type of library (user or group)')
-    parser.add_argument('--library-id', required=True, help='Your user or group ID')
-    parser.add_argument('--collection', help='Collection ID (optional)')
-    parser.add_argument('--item-type', help='Filter by item type (e.g., book, journalArticle)')
-    parser.add_argument('--list-collections', action='store_true', 
+    parser.add_argument('-l', '--library-id', required=True, help='Your user or group ID')
+    parser.add_argument('-c', '--collection', help='Collection ID (optional)')
+    parser.add_argument('-i', '--item-type', help='Filter by item type (e.g., book, journalArticle)')
+    parser.add_argument('-L', '--list-collections', action='store_true', 
                         help='List all collections instead of items')
-    parser.add_argument('--output-format', choices=['text', 'html', 'pdf'], default='text',
+    parser.add_argument('-o', '--output-format', choices=['text', 'html', 'pdf'], default='text',
                         help='Output format (default: text)')
-    parser.add_argument('--output-file', help='Output file name (for html and pdf)')
-    parser.add_argument('--verbose', action='store_true', 
+    parser.add_argument('-f', '--output-file', help='Output file name (for html and pdf)')
+    parser.add_argument('-v', '--verbose', action='store_true', 
                         help='Display progress information during execution')
-    parser.add_argument('--service-account-file', 
+    parser.add_argument('-s', '--service-account-file', 
                         help='Path to Google service account JSON file for Drive integration')
     
     return parser.parse_args()
@@ -810,7 +846,7 @@ def get_collection_name(zot, collection_id, verbose):
     return collection_name
 
 def handle_item_listing(zot, collection_id, item_type, output_format, output_file, verbose, 
-                       service_account_file=None):
+                       google_creds=None):
     """Handle the workflow for listing items."""
     print_progress("Fetching items...", verbose)
     items = get_items(zot, collection_id, item_type, verbose)
@@ -821,7 +857,7 @@ def handle_item_listing(zot, collection_id, item_type, output_format, output_fil
     
     print_progress(f"Generating {output_format} output...", verbose)
     display_items(items, output_format, output_file, collection_name, zot, verbose, 
-                 service_account_file)
+                 google_creds)
     print_progress("Output generation complete", verbose)
 
 def main():
@@ -834,21 +870,26 @@ def main():
         zot = connect_to_zotero(args.library_id, args.library_type, args.api_key)
         print_progress("Connection established successfully", args.verbose)
 
-        # Test Google Drive access if service account file was provided
+        # Set up Google Drive credentials if service account file was provided
+        google_creds = None
         if args.service_account_file:
-            print_progress("Testing Google Drive access with service account...", args.verbose)
-            success, message = test_google_drive_access(
-                args.service_account_file, 
-                verbose=args.verbose
-            )
+            print_progress("Authenticating with Google Drive using service account...", args.verbose)
+            google_creds = authenticate_google_drive(args.service_account_file)
             
-            if success:
-                print_progress("Google Drive access verified successfully!", args.verbose)
-                print_progress(message, args.verbose)
+            # Test Google Drive access with the credentials
+            if google_creds:
+                print_progress("Testing Google Drive access...", args.verbose)
+                success, message = test_google_drive_access(google_creds, verbose=args.verbose)
+                
+                if success:
+                    print_progress("Google Drive access verified successfully!", args.verbose)
+                    print_progress(message, args.verbose)
+                else:
+                    print_progress("Google Drive access failed!", args.verbose, level=3, file=sys.stderr)
+                    print_progress(message, args.verbose, file=sys.stderr)
+                    print_progress("The script will continue, but Google Drive links won't be available.", args.verbose)
             else:
-                print_progress("Google Drive access failed!", args.verbose, level=3, file=sys.stderr)
-                print_progress(message, args.verbose, file=sys.stderr)
-                print_progress("The script will continue, but Google Drive links won't be available.", args.verbose)
+                print_progress("Google Drive authentication failed. Google Drive integration will be disabled.", args.verbose, file=sys.stderr)
         else:
             print_progress("No Google Drive service account file provided. Google Drive integration will be disabled.", args.verbose)
         
@@ -858,7 +899,7 @@ def main():
         else:
             handle_item_listing(zot, args.collection, args.item_type, 
                                args.output_format, args.output_file, args.verbose,
-                               args.service_account_file)
+                               google_creds)
     
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
