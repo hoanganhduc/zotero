@@ -5,3 +5,4 @@ The following lists are created using the [list-zotero-collection.py](list-zoter
 * [Book](book.html)
 * [Combinatorial Reconfiguration](reconfiguration.html)
 * [Writing](writing.html)
+* [Inspiration](inspiration.html)

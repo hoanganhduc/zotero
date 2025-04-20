@@ -30,8 +30,8 @@ jobs:
           COPYRIGHT_NOTICE="This page is created from a Zotero collection of <a href='https://hoanganhduc.github.io/'>Duc A. Hoang</a> using the <a href='list-zotero-collection.py'>list-zotero-collection.py</a> script. The listed materials have been gathered from various sources. Access to these materials via Google Drive is restricted due to possible copyright issues."
                   
           # Define collections and output files
-          COLLECTIONS=("${{ secrets.ZOTERO_COLLECTION_BOOK }}" "${{ secrets.ZOTERO_COLLECTION_RECONF }}" "${{ secrets.ZOTERO_COLLECTION_WRITING }}")
-          OUTPUT_FILES=("book.html" "reconfiguration.html" "writing.html")
+          COLLECTIONS=("${{ secrets.ZOTERO_COLLECTION_BOOK }}" "${{ secrets.ZOTERO_COLLECTION_RECONF }}" "${{ secrets.ZOTERO_COLLECTION_WRITING }}" "${{ secrets.ZOTERO_COLLECTION_INSPIRATION }}")
+          OUTPUT_FILES=("book.html" "reconfiguration.html" "writing.html" "inspiration.html")
                   
           # Loop through all collections
           for i in {0..2}; do
