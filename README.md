@@ -1,6 +1,8 @@
-# List of some Zotero collections from my Zotero library
+# List of some Zotero Collections
 
-The following lists are created using the [list-zotero-collection.py](list-zotero-collection.py) script.
+[![Build HTML](https://github.com/hoanganhduc/zotero/actions/workflows/build.yml/badge.svg)](https://github.com/hoanganhduc/zotero/actions/workflows/build.yml)
+
+The following lists are generated using the [list-zotero-collection.py](list-zotero-collection.py) script.
 
 * [Book](book.html)
 * [Combinatorial Reconfiguration](reconfiguration.html)
