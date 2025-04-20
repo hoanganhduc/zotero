@@ -671,8 +671,18 @@ def generate_text_output(items, zot, collection_name=None, google_creds=None, ve
     # Ensure Unicode output    
     return "\n".join(header + ordered_items)
 
-def generate_html_header(title):
-    """Generate the HTML header section with styles and KaTeX support."""
+def generate_html_header(title, notice=None):
+    """
+    Generate the HTML header section with styles and KaTeX support.
+    
+    Args:
+        title (str): The title for the HTML document
+        notice (str, optional): Custom notice message. If None, uses default.
+    """
+    # Use default notice if none is provided
+    default_notice = "This document was automatically generated from a Zotero library. Items are listed for personal reference only. All references, articles, and other content remain the property of their respective copyright holders. This document is not for redistribution. Last updated on " + datetime.now().strftime("%Y-%m-%d %H:%M:%S") + "."
+    notice_text = notice if notice is not None else default_notice
+    
     return [
         "<!DOCTYPE html>",
         "<html>",
@@ -720,7 +730,7 @@ def generate_html_header(title):
         "</a>",
         "</div>",
         f"<h1>{title}</h1>",
-        "<div class='notice'>This page is created from a Zotero collection of <a href='https://hoanganhduc.github.io/'>Duc A. Hoang</a> using the <a href='list-zotero-collection.py'>list-zotero-collection.py</a> script. Materials listed have been gathered from various sources. Access to these materials via Google Drive is restricted due to possible copyright issues.</div>"
+        f"<div class='notice'>{notice_text}</div>"
     ]
 
 def generate_search_container():
@@ -888,7 +898,7 @@ def generate_search_script():
         "</html>"
     ]
 
-def generate_html_output(items, zot, collection_name=None, google_creds=None, verbose=False):
+def generate_html_output(items, zot, collection_name=None, google_creds=None, verbose=False, notice=None):
     """Generate complete HTML document from items."""
     if verbose:
         print_progress("Starting HTML output generation", verbose)
@@ -900,7 +910,7 @@ def generate_html_output(items, zot, collection_name=None, google_creds=None, ve
     
     # Build HTML components
     html_parts = []
-    html_parts.extend(generate_html_header(title))
+    html_parts.extend(generate_html_header(title, notice))  # Pass the notice parameter
     html_parts.extend(generate_search_container())
     
     # Process items
@@ -1003,7 +1013,7 @@ def display_collections(collections, output_format, output_file=None, verbose=Fa
     
     print_progress("Collection display complete", verbose)
 
-def display_items(items, output_format, output_file=None, collection_name=None, zot=None, verbose=False, google_creds=None):
+def display_items(items, output_format, output_file=None, collection_name=None, zot=None, verbose=False, google_creds=None, notice=None):
     """Display items in the specified format."""
     if not items:
         print("No items found.")
@@ -1024,7 +1034,7 @@ def display_items(items, output_format, output_file=None, collection_name=None, 
             print(text_content)
     elif output_format == 'html':
         print_progress("Generating HTML output...", verbose)
-        html_content = generate_html_output(items, zot, collection_name, google_creds, verbose)
+        html_content = generate_html_output(items, zot, collection_name, google_creds, verbose, notice)
         if output_file:
             print_progress(f"Saving HTML output to {output_file}", verbose)
             with open(output_file, 'w', encoding='utf-8') as f:
@@ -1035,7 +1045,7 @@ def display_items(items, output_format, output_file=None, collection_name=None, 
             print(html_content)
     elif output_format == 'pdf':
         print_progress("Generating PDF output...", verbose)
-        html_content = generate_html_output(items, zot, collection_name, google_creds, verbose)
+        html_content = generate_html_output(items, zot, collection_name, google_creds, verbose, notice)
         if not output_file:
             output_file = "zotero_items.pdf"
             print_progress(f"No output file specified, using default: {output_file}", verbose)
@@ -1062,6 +1072,8 @@ def parse_arguments():
                         help='Display progress information during execution')
     parser.add_argument('-s', '--service-account-file', 
                         help='Path to Google service account JSON file or the JSON string itself for Drive integration')
+    parser.add_argument('-n', '--notice', 
+                        help='Custom copyright notice message for HTML/PDF output (uses a default message if not specified)')
     
     return parser.parse_args()
 
@@ -1088,7 +1100,7 @@ def get_collection_name(zot, collection_id, verbose):
     return collection_name
 
 def handle_item_listing(zot, collection_id, item_type, output_format, output_file, verbose, 
-                       google_creds=None):
+                       google_creds=None, notice=None):
     """Handle the workflow for listing items."""
     print_progress("Fetching items...", verbose)
     items = get_items(zot, collection_id, item_type, verbose)
@@ -1099,7 +1111,7 @@ def handle_item_listing(zot, collection_id, item_type, output_format, output_fil
     
     print_progress(f"Generating {output_format} output...", verbose)
     display_items(items, output_format, output_file, collection_name, zot, verbose, 
-                 google_creds)
+                 google_creds, notice)
     print_progress("Output generation complete", verbose)
 
 def main():
@@ -1141,7 +1153,7 @@ def main():
         else:
             handle_item_listing(zot, args.collection, args.item_type, 
                                args.output_format, args.output_file, args.verbose,
-                               google_creds)
+                               google_creds, args.notice)
     
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
