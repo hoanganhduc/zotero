@@ -585,7 +585,9 @@ def format_item_html(item, zot, google_creds=None, verbose=False):
     # Extract DOI using extract_doi function
     doi = extract_doi(item)
     if doi:
-        html_parts.append(f"<p><strong>DOI:</strong> {html.escape(doi)}</p>")
+        doi_escaped = html.escape(doi)
+        doi_url = f"https://doi.org/{doi_escaped}"
+        html_parts.append(f"<p><strong>DOI:</strong> <a href='{doi_url}' target='_blank'>{doi_escaped}</a></p>")
     
     # Add attachment paths with Google Drive links
     attachments = get_attachment_paths(zot, item, google_creds, verbose)
