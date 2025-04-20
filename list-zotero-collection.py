@@ -7,6 +7,7 @@ import os
 import html
 import io
 import sys
+import re
 from datetime import datetime
 
 # Third-party imports
@@ -396,6 +397,60 @@ def get_attachment_paths(zot, item, google_creds=None, verbose=False):
     
     return attachment_info
 
+def extract_doi(item):
+    """
+    Extract DOI from a Zotero item by examining URL and Extra fields.
+    
+    Args:
+        item: Zotero item dictionary
+        
+    Returns:
+        str: DOI if found, None otherwise
+    """
+    if not item or 'data' not in item:
+        return None
+    
+    doi = None
+    
+    # Check if DOI is directly available in the DOI field
+    if 'DOI' in item['data'] and item['data']['DOI']:
+        doi = item['data']['DOI']
+        return doi
+    
+    # Check URL field for DOI
+    if 'url' in item['data'] and item['data']['url']:
+        url = item['data']['url']
+        
+        # Check for DOI in doi.org URLs
+        if 'doi.org/' in url:
+            doi_part = url.split('doi.org/')[-1]
+            # Remove any trailing parameters or anchors
+            doi = doi_part.split('#')[0].split('?')[0]
+            return doi
+        
+        # Look for DOI pattern in URL
+        doi_match = re.search(r'(10\.\d{4,}(?:\.\d+)*\/(?:(?!["&\'])\S)+)', url)
+        if doi_match:
+            return doi_match.group(0)
+    
+    # Check Extra field for DOI
+    if 'extra' in item['data'] and item['data']['extra']:
+        extra = item['data']['extra']
+        
+        # Look for lines starting with DOI:
+        for line in extra.split('\n'):
+            line = line.strip()
+            if line.lower().startswith('doi:'):
+                doi = line[4:].strip()
+                return doi
+        
+        # Try regex for DOI pattern in Extra field
+        doi_match = re.search(r'(10\.\d{4,}(?:\.\d+)*\/(?:(?!["&\'])\S)+)', extra)
+        if doi_match:
+            return doi_match.group(0)
+    
+    return doi
+
 def format_item_text(item, zot, google_creds=None, verbose=False):
     """Format a single item for text output with proper Unicode support."""
     output = []
@@ -426,9 +481,6 @@ def format_item_text(item, zot, google_creds=None, verbose=False):
             output.append(f"Place: {item['data']['place']}")
         if 'ISBN' in item['data'] and item['data']['ISBN']:
             output.append(f"ISBN: {item['data']['ISBN']}")
-        # Add DOI for books
-        if 'DOI' in item['data'] and item['data']['DOI']:
-            output.append(f"DOI: {item['data']['DOI']}")
     elif item_type == 'journalArticle':
         if 'publicationTitle' in item['data'] and item['data']['publicationTitle']:
             output.append(f"Journal: {item['data']['publicationTitle']}")
@@ -438,8 +490,6 @@ def format_item_text(item, zot, google_creds=None, verbose=False):
             output.append(f"Issue: {item['data']['issue']}")
         if 'pages' in item['data'] and item['data']['pages']:
             output.append(f"Pages: {item['data']['pages']}")
-        if 'DOI' in item['data'] and item['data']['DOI']:
-            output.append(f"DOI: {item['data']['DOI']}")
     elif item_type == 'manuscript':
         # Add arXiv URL for manuscripts
         if 'url' in item['data'] and item['data']['url'] and 'arxiv.org' in item['data']['url']:
@@ -455,9 +505,10 @@ def format_item_text(item, zot, google_creds=None, verbose=False):
                         if 'url' not in item['data'] or 'arxiv.org' not in item['data']['url']:
                             output.append(f"arXiv URL: https://arxiv.org/abs/{arxiv_id}")
     
-    # Add DOI for any item type if it exists and hasn't been added yet
-    if 'DOI' in item['data'] and item['data']['DOI'] and item_type not in ['book', 'journalArticle']:
-        output.append(f"DOI: {item['data']['DOI']}")
+    # Extract DOI using the extract_doi function
+    doi = extract_doi(item)
+    if doi:
+        output.append(f"DOI: {doi}")
     
     # Add attachment paths and Google Drive URLs
     attachments = get_attachment_paths(zot, item, google_creds, verbose)
@@ -508,9 +559,6 @@ def format_item_html(item, zot, google_creds=None, verbose=False):
             html_parts.append(f"<p><strong>Place:</strong> {html.escape(item['data']['place'])}</p>")
         if 'ISBN' in item['data'] and item['data']['ISBN']:
             html_parts.append(f"<p><strong>ISBN:</strong> {html.escape(item['data']['ISBN'])}</p>")
-        # Add DOI for books
-        if 'DOI' in item['data'] and item['data']['DOI']:
-            html_parts.append(f"<p><strong>DOI:</strong> {html.escape(item['data']['DOI'])}</p>")
     elif item_type == 'journalArticle':
         if 'publicationTitle' in item['data'] and item['data']['publicationTitle']:
             html_parts.append(f"<p><strong>Journal:</strong> {html.escape(item['data']['publicationTitle'])}</p>")
@@ -520,8 +568,6 @@ def format_item_html(item, zot, google_creds=None, verbose=False):
             html_parts.append(f"<p><strong>Issue:</strong> {html.escape(item['data']['issue'])}</p>")
         if 'pages' in item['data'] and item['data']['pages']:
             html_parts.append(f"<p><strong>Pages:</strong> {html.escape(item['data']['pages'])}</p>")
-        if 'DOI' in item['data'] and item['data']['DOI']:
-            html_parts.append(f"<p><strong>DOI:</strong> {html.escape(item['data']['DOI'])}</p>")
     elif item_type == 'manuscript':
         # Add arXiv URL for manuscripts
         if 'url' in item['data'] and item['data']['url'] and 'arxiv.org' in item['data']['url']:
@@ -538,9 +584,10 @@ def format_item_html(item, zot, google_creds=None, verbose=False):
                             arxiv_url = f"https://arxiv.org/abs/{arxiv_id}"
                             html_parts.append(f"<p><strong>arXiv URL:</strong> <a href='{html.escape(arxiv_url)}' target='_blank'>{html.escape(arxiv_url)}</a></p>")
     
-    # Add DOI for any item type if it exists and hasn't been added yet
-    if 'DOI' in item['data'] and item['data']['DOI'] and item_type not in ['book', 'journalArticle']:
-        html_parts.append(f"<p><strong>DOI:</strong> {html.escape(item['data']['DOI'])}</p>")
+    # Extract DOI using extract_doi function
+    doi = extract_doi(item)
+    if doi:
+        html_parts.append(f"<p><strong>DOI:</strong> {html.escape(doi)}</p>")
     
     # Add attachment paths with Google Drive links
     attachments = get_attachment_paths(zot, item, google_creds, verbose)
