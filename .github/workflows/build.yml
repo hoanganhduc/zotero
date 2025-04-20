@@ -25,6 +25,7 @@ jobs:
         run: |
           GDRIVE_AUTH=$(echo "${{ secrets.GDRIVE_SERVICE_ACCOUNT }}" | base64 --decode | jq)
           python3 list-zotero-collection.py --api-key ${{ secrets.ZOTERO_API_KEY }} --library-id ${{ secrets.ZOTERO_LIBRARY_ID }} --collection ${{ secrets.ZOTERO_COLLECTION_BOOK }} --output-format html --output-file book.html --service-account-file "${GDRIVE_AUTH}"
+          python3 list-zotero-collection.py --api-key ${{ secrets.ZOTERO_API_KEY }} --library-id ${{ secrets.ZOTERO_LIBRARY_ID }} --collection ${{ secrets.ZOTERO_COLLECTION_RECONF }} --output-format html --output-file reconfiguration.html --service-account-file "${GDRIVE_AUTH}"
       - name: Import GPG key
         id: import-gpg
         uses: crazy-max/ghaction-import-gpg@v4
