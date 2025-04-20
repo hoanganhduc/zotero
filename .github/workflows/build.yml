@@ -52,5 +52,5 @@ jobs:
           git config --global user.name "${{ steps.import-gpg.outputs.name }}"
           NOW=$(date)
           git add --all .
-          git commit -S -m "Update ${NOW}" || echo "No changes to commit"
+          git commit -S -m "Updated via Github Action @ ${NOW}" || echo "No changes to commit"
           git push
