@@ -626,21 +626,30 @@ def generate_text_output(items, zot, collection_name=None, google_creds=None, ve
     # Ensure Unicode output    
     return "\n".join(header + ordered_items)
 
-def generate_html_output(items, zot, collection_name=None, google_creds=None, verbose=False):
-    """Generate complete HTML document from items."""
-    if verbose:
-        print_progress("Starting HTML output generation", verbose)
-    
-    current_date = datetime.now().strftime("%Y-%m-%d")
-    title = f"Zotero Items - {current_date}"
-    if collection_name:
-        title = f"Zotero Collection: {collection_name} - {current_date}"
-        
-    html = [
+def generate_html_header(title):
+    """Generate the HTML header section with styles and KaTeX support."""
+    return [
         "<!DOCTYPE html>",
         "<html>",
         "<head>",
         f"<title>{title}</title>",
+        "<!-- KaTeX CSS -->",
+        "<link rel='stylesheet' href='https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.css' integrity='sha384-GvrOXuhMATgEsSwCs4smul74iXGOixntILdUW9XmUC6+HX0sLNAK3q71HotJqlAn' crossorigin='anonymous'>",
+        "<!-- KaTeX JS -->",
+        "<script defer src='https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.js' integrity='sha384-cpW21h6RZv/phavutF+AuVYrr+dA8xD9zs6FwLpaCct6O9ctzYFfFr4dgmgccOTx' crossorigin='anonymous'></script>",
+        "<!-- KaTeX auto-render extension -->",
+        "<script defer src='https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/contrib/auto-render.min.js' integrity='sha384-+VBxd3r6XgURycqtZ117nYw44OOcIax56Z4dCRWbxyPt0Koah1uHoK0o4+/RRE05' crossorigin='anonymous'></script>",
+        "<script>",
+        "document.addEventListener('DOMContentLoaded', function() {",
+        "  renderMathInElement(document.body, {",
+        "    delimiters: [",
+        "      {left: '$$', right: '$$', display: true},",
+        "      {left: '$', right: '$', display: false}",
+        "    ],",
+        "    throwOnError: false",
+        "  });",
+        "});",
+        "</script>",
         "<style>",
         "body { font-family: Arial, sans-serif; margin: 40px; }",
         ".item { margin-bottom: 30px; border-bottom: 1px solid #ccc; padding-bottom: 20px; }",
@@ -666,29 +675,34 @@ def generate_html_output(items, zot, collection_name=None, google_creds=None, ve
         "</a>",
         "</div>",
         f"<h1>{title}</h1>",
-        "<div class='notice'>This page is created from a Zotero collection of <a href='https://hoanganhduc.github.io/'>Duc A. Hoang</a> using the <a href='list-zotero-collection.py'>list-zotero-collection.py</a> script. Materials listed have been gathered from various sources. Access to these materials via Google Drive is restricted due to possible copyright issues.</div>",
-        
-        # Add search box
+        "<div class='notice'>This page is created from a Zotero collection of <a href='https://hoanganhduc.github.io/'>Duc A. Hoang</a> using the <a href='list-zotero-collection.py'>list-zotero-collection.py</a> script. Materials listed have been gathered from various sources. Access to these materials via Google Drive is restricted due to possible copyright issues.</div>"
+    ]
+
+def generate_search_container():
+    """Generate the search box HTML."""
+    return [
         "<div class='search-container'>",
         "<input type='text' id='searchInput' placeholder='Search within this page...' />",
         "<button id='searchBtn'>Search</button>",
         "<span id='searchCount'></span>",
         "</div>"
     ]
-    
+
+def format_single_item(idx, item, collection_name, zot, google_creds, verbose):
+    """Format a single item for HTML output."""
+    try:
+        item_number = f"<div class='item-number'>{collection_name} #{idx+1}</div>"
+        item_content = format_item_html(item, zot, google_creds, verbose)
+        return item_number + "\n" + item_content
+    except Exception as e:
+        error_msg = f"Error formatting item {idx+1}: {e}"
+        print_progress(error_msg, verbose, file=sys.stderr)
+        return f"<div class='item-error'>{error_msg}</div>"
+
+def generate_items_html(items, collection_name, zot, google_creds, verbose):
+    """Generate HTML for all items using parallel processing."""
     if verbose:
         print_progress(f"Preparing to format {len(items)} items simultaneously", verbose)
-    
-    # Helper function to format a single item
-    def format_single_item(idx, item):
-        try:
-            item_number = f"<div class='item-number'>{collection_name} #{idx+1}</div>"
-            item_content = format_item_html(item, zot, google_creds, verbose)
-            return item_number + "\n" + item_content
-        except Exception as e:
-            error_msg = f"Error formatting item {idx+1}: {e}"
-            print_progress(error_msg, verbose, file=sys.stderr)
-            return f"<div class='item-error'>{error_msg}</div>"
     
     # Process items in parallel with ThreadPoolExecutor
     formatted_items = []
@@ -696,7 +710,7 @@ def generate_html_output(items, zot, collection_name=None, google_creds=None, ve
         # Create and submit all tasks
         future_to_idx = {}
         for i, item in enumerate(items):
-            future = executor.submit(format_single_item, i, item)
+            future = executor.submit(format_single_item, i, item, collection_name, zot, google_creds, verbose)
             future_to_idx[future] = i
         
         # Process results as they complete
@@ -717,13 +731,11 @@ def generate_html_output(items, zot, collection_name=None, google_creds=None, ve
     
     # Sort by original index to maintain order
     formatted_items.sort(key=lambda x: x[0])
-    ordered_items = [html_content for _, html_content in formatted_items]
-    
-    # Add the formatted items to the HTML content
-    html.extend(ordered_items)
-    
-    # Add search JavaScript functionality
-    html.extend([
+    return [html_content for _, html_content in formatted_items]
+
+def generate_search_script():
+    """Generate the JavaScript code for search functionality."""
+    return [
         "<script>",
         "document.addEventListener('DOMContentLoaded', function() {",
         "  const searchInput = document.getElementById('searchInput');",
@@ -829,12 +841,34 @@ def generate_html_output(items, zot, collection_name=None, google_creds=None, ve
         "</script>",
         "</body>",
         "</html>"
-    ])
+    ]
+
+def generate_html_output(items, zot, collection_name=None, google_creds=None, verbose=False):
+    """Generate complete HTML document from items."""
+    if verbose:
+        print_progress("Starting HTML output generation", verbose)
+    
+    current_date = datetime.now().strftime("%Y-%m-%d")
+    title = f"Zotero Items - {current_date}"
+    if collection_name:
+        title = f"Zotero Collection: {collection_name} - {current_date}"
+    
+    # Build HTML components
+    html_parts = []
+    html_parts.extend(generate_html_header(title))
+    html_parts.extend(generate_search_container())
+    
+    # Process items
+    formatted_items = generate_items_html(items, collection_name, zot, google_creds, verbose)
+    html_parts.extend(formatted_items)
+    
+    # Add search functionality
+    html_parts.extend(generate_search_script())
     
     if verbose:
         print_progress("HTML output generation complete", verbose)
     
-    return "\n".join(html)
+    return "\n".join(html_parts)
 
 # For PDF generation
 try:
