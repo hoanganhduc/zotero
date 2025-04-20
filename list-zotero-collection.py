@@ -659,7 +659,7 @@ def generate_html_output(items, zot, collection_name=None, google_creds=None, ve
         "</a>",
         "</div>",
         f"<h1>{title}</h1>",
-        "<div class='notice'>This page is created from a Zotero collection of <a href='https://hoanganhduc.github.io/'>Duc A. Hoang</a>. Materials listed have been gathered from various sources. Please note that access to these materials via Google Drive is restricted due to possible copyright issues.</div>"
+        "<div class='notice'>This page is created from a Zotero collection of <a href='https://hoanganhduc.github.io/'>Duc A. Hoang</a> using the <a href='list-zotero-collection.py'>list-zotero-collection.py</a> script. Materials listed have been gathered from various sources. Access to these materials via Google Drive is restricted due to possible copyright issues.</div>"
     ]
     
     if verbose:
