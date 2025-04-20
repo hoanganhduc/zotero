@@ -4,10 +4,12 @@ on:
   #   branches:
   #     - master
   workflow_dispatch:
+  schedule:
+    - cron: '0 0 1 * *' # Every month on the first day
 permissions:
   contents: write
 jobs:
-  build_latex:
+  cron:
     runs-on: ubuntu-latest
     steps:
       - name: Set up Git repository
