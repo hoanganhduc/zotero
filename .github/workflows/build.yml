@@ -1,0 +1,46 @@
+name: Build HTML
+on: 
+  # push:
+  #   branches:
+  #     - master
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build_latex:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Git repository
+        uses: actions/checkout@v4
+        
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Build HTML
+        run: |
+          python3 list-zotero-collection.py --api-key ${{ secrets.ZOTERO_API_KEY }} --library-id ${{ secrets.ZOTERO_LIBRARY_ID }} --collection ${{ secrets.ZOTERO_COLLECTION_BOOK }} --output-format html --output-file book.html --service-account-file ${{ secrets.GDRIVE_SERVICE_ACCOUNT }}
+      - name: Import GPG key
+        id: import-gpg
+        uses: crazy-max/ghaction-import-gpg@v4
+        with:
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+          passphrase: ${{ secrets.GPG_PASSPHRASE }}
+          git_user_signingkey: true
+          git_commit_gpgsign: true
+      - name: Commit and push changes
+        run: |
+          git config --global user.email "${{ steps.import-gpg.outputs.email }}"
+          git config --global user.name "${{ steps.import-gpg.outputs.name }}"
+          NOW=$(date)
+          git add book.html
+          git commit -S -m "Update book.html ${NOW}" || echo "No changes to commit"
+          git push
+      - name: Upload HTML artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: book.html
