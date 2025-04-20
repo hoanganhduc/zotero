@@ -41,6 +41,6 @@ jobs:
           git commit -S -m "Update book.html ${NOW}" || echo "No changes to commit"
           git push
       - name: Upload HTML artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: book.html
