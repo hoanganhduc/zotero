@@ -4,6 +4,8 @@ import argparse
 import concurrent.futures
 import json
 import os
+import html
+import io
 import sys
 from datetime import datetime
 
@@ -16,7 +18,6 @@ from google.oauth2 import service_account
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from pyzotero import zotero
-import html
 
 # Google Drive API imports
 # Remark: Create a service account in Google Console and share Zotero folder with the service account email. If you don't share it, you won't be able to access the files.
@@ -25,7 +26,7 @@ def authenticate_google_drive(service_account_file):
     Authenticate to Google Drive using a service account.
     
     Args:
-        service_account_file (str): Path to the service account key JSON file
+        service_account_file (str): Path to the service account key JSON file or JSON string
         
     Returns:
         google.auth.credentials.Credentials: Google API credentials
@@ -35,21 +36,37 @@ def authenticate_google_drive(service_account_file):
     SCOPES = ['https://www.googleapis.com/auth/drive.metadata.readonly']
     
     creds = None
+    service_info = {}
     
     try:
-        # Authenticate using the service account key file
-        if not os.path.exists(service_account_file):
-            print(f"Error: Service account key file not found: {service_account_file}")
-            return None
+        # Check if input is a JSON string (starts with '{' and ends with '}')
+        if service_account_file.strip().startswith('{') and service_account_file.strip().endswith('}'):
+            # Parse JSON string directly
+            service_info = json.loads(service_account_file)
             
-        creds = service_account.Credentials.from_service_account_file(
-            service_account_file, scopes=SCOPES)
+            # Create credentials from parsed JSON
+            service_json_io = io.StringIO(service_account_file)
+            creds = service_account.Credentials.from_service_account_info(
+                service_info, scopes=SCOPES)
             
-        # Get service account email for logging
-        service_info = {}
-        with open(service_account_file, 'r') as f:
-            service_info = json.load(f)
+            print("Authenticated using provided JSON string")
+        else:
+            # Treat as file path
+            if not os.path.exists(service_account_file):
+                print(f"Error: Service account key file not found: {service_account_file}")
+                return None
+                
+            # Read the file and load JSON for getting email
+            with open(service_account_file, 'r') as f:
+                service_info = json.load(f)
+            
+            # Create credentials from file
+            creds = service_account.Credentials.from_service_account_file(
+                service_account_file, scopes=SCOPES)
+                
+            print(f"Authenticated using service account file: {service_account_file}")
         
+        # Get service account email for logging
         service_email = service_info.get('client_email', 'unknown-service-account')
         print(f"Authenticated as service account: {service_email}")
             
@@ -819,7 +836,7 @@ def parse_arguments():
     parser.add_argument('-v', '--verbose', action='store_true', 
                         help='Display progress information during execution')
     parser.add_argument('-s', '--service-account-file', 
-                        help='Path to Google service account JSON file for Drive integration')
+                        help='Path to Google service account JSON file or the JSON string itself for Drive integration')
     
     return parser.parse_args()
 
