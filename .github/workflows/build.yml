@@ -40,5 +40,5 @@ jobs:
           git config --global user.name "${{ steps.import-gpg.outputs.name }}"
           NOW=$(date)
           git add book.html
-          git commit -S -m "Update book.html ${NOW}" || echo "No changes to commit"
+          git commit -S -m "Update ${NOW}" || echo "No changes to commit"
           git push
