@@ -319,7 +319,8 @@ def get_items(zot, collection=None, item_type=None, verbose=True):
 
 def get_attachment_paths(zot, item, google_creds=None, verbose=False):
     """
-    Get PDF, DJVU, MP4, PPT, PPTX attachment paths for a given item and their Google Drive URLs if available.
+    Get attachment paths for a given item and their Google Drive URLs if available.
+    Supports various file types including PDF, DJVU, EPUB, AZW3, MOBI and more.
     
     Args:
         zot: Zotero API client instance
@@ -350,7 +351,16 @@ def get_attachment_paths(zot, item, google_creds=None, verbose=False):
                 'image/vnd.djvu',
                 'video/mp4',
                 'application/vnd.ms-powerpoint',
-                'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+                'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+                # Additional ebook formats
+                'application/epub+zip',                   # EPUB
+                'application/vnd.amazon.ebook',           # AZW3
+                'application/x-mobi8-ebook',              # AZW3 (alternate)
+                'application/x-mobipocket-ebook',         # MOBI
+                'application/vnd.comicbook+zip',          # CBZ (Comic book)
+                'application/x-cbr',                      # CBR (Comic book)
+                'application/x-fictionbook+xml',          # FB2
+                'text/plain'                              # TXT
             ]:
                 # Get the file information
                 if 'key' in attachment and 'filename' in attachment['data']:
@@ -416,6 +426,9 @@ def format_item_text(item, zot, google_creds=None, verbose=False):
             output.append(f"Place: {item['data']['place']}")
         if 'ISBN' in item['data'] and item['data']['ISBN']:
             output.append(f"ISBN: {item['data']['ISBN']}")
+        # Add DOI for books
+        if 'DOI' in item['data'] and item['data']['DOI']:
+            output.append(f"DOI: {item['data']['DOI']}")
     elif item_type == 'journalArticle':
         if 'publicationTitle' in item['data'] and item['data']['publicationTitle']:
             output.append(f"Journal: {item['data']['publicationTitle']}")
@@ -427,6 +440,24 @@ def format_item_text(item, zot, google_creds=None, verbose=False):
             output.append(f"Pages: {item['data']['pages']}")
         if 'DOI' in item['data'] and item['data']['DOI']:
             output.append(f"DOI: {item['data']['DOI']}")
+    elif item_type == 'manuscript':
+        # Add arXiv URL for manuscripts
+        if 'url' in item['data'] and item['data']['url'] and 'arxiv.org' in item['data']['url']:
+            output.append(f"arXiv URL: {item['data']['url']}")
+        # Check if there's an arXiv ID in extra field
+        if 'extra' in item['data'] and item['data']['extra']:
+            extra = item['data']['extra']
+            if 'arXiv:' in extra:
+                for line in extra.split('\n'):
+                    if line.strip().startswith('arXiv:'):
+                        arxiv_id = line.strip().replace('arXiv:', '').strip()
+                        output.append(f"arXiv ID: {arxiv_id}")
+                        if 'url' not in item['data'] or 'arxiv.org' not in item['data']['url']:
+                            output.append(f"arXiv URL: https://arxiv.org/abs/{arxiv_id}")
+    
+    # Add DOI for any item type if it exists and hasn't been added yet
+    if 'DOI' in item['data'] and item['data']['DOI'] and item_type not in ['book', 'journalArticle']:
+        output.append(f"DOI: {item['data']['DOI']}")
     
     # Add attachment paths and Google Drive URLs
     attachments = get_attachment_paths(zot, item, google_creds, verbose)
@@ -477,6 +508,9 @@ def format_item_html(item, zot, google_creds=None, verbose=False):
             html_parts.append(f"<p><strong>Place:</strong> {html.escape(item['data']['place'])}</p>")
         if 'ISBN' in item['data'] and item['data']['ISBN']:
             html_parts.append(f"<p><strong>ISBN:</strong> {html.escape(item['data']['ISBN'])}</p>")
+        # Add DOI for books
+        if 'DOI' in item['data'] and item['data']['DOI']:
+            html_parts.append(f"<p><strong>DOI:</strong> {html.escape(item['data']['DOI'])}</p>")
     elif item_type == 'journalArticle':
         if 'publicationTitle' in item['data'] and item['data']['publicationTitle']:
             html_parts.append(f"<p><strong>Journal:</strong> {html.escape(item['data']['publicationTitle'])}</p>")
@@ -488,6 +522,25 @@ def format_item_html(item, zot, google_creds=None, verbose=False):
             html_parts.append(f"<p><strong>Pages:</strong> {html.escape(item['data']['pages'])}</p>")
         if 'DOI' in item['data'] and item['data']['DOI']:
             html_parts.append(f"<p><strong>DOI:</strong> {html.escape(item['data']['DOI'])}</p>")
+    elif item_type == 'manuscript':
+        # Add arXiv URL for manuscripts
+        if 'url' in item['data'] and item['data']['url'] and 'arxiv.org' in item['data']['url']:
+            html_parts.append(f"<p><strong>arXiv URL:</strong> <a href='{html.escape(item['data']['url'])}' target='_blank'>{html.escape(item['data']['url'])}</a></p>")
+        # Check if there's an arXiv ID in extra field
+        if 'extra' in item['data'] and item['data']['extra']:
+            extra = item['data']['extra']
+            if 'arXiv:' in extra:
+                for line in extra.split('\n'):
+                    if line.strip().startswith('arXiv:'):
+                        arxiv_id = line.strip().replace('arXiv:', '').strip()
+                        html_parts.append(f"<p><strong>arXiv ID:</strong> {html.escape(arxiv_id)}</p>")
+                        if 'url' not in item['data'] or 'arxiv.org' not in item['data']['url']:
+                            arxiv_url = f"https://arxiv.org/abs/{arxiv_id}"
+                            html_parts.append(f"<p><strong>arXiv URL:</strong> <a href='{html.escape(arxiv_url)}' target='_blank'>{html.escape(arxiv_url)}</a></p>")
+    
+    # Add DOI for any item type if it exists and hasn't been added yet
+    if 'DOI' in item['data'] and item['data']['DOI'] and item_type not in ['book', 'journalArticle']:
+        html_parts.append(f"<p><strong>DOI:</strong> {html.escape(item['data']['DOI'])}</p>")
     
     # Add attachment paths with Google Drive links
     attachments = get_attachment_paths(zot, item, google_creds, verbose)
