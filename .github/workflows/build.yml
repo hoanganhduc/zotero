@@ -39,7 +39,7 @@ jobs:
           COLLECTION_COUNT=${#ZOTERO_COLLECTIONS[@]}
           cd zotero
           for ((i=0; i<$COLLECTION_COUNT; i++)); do
-            python3 list-zotero-collection.py --api-key ${{ secrets.ZOTERO_API_KEY }} --library-id ${{ secrets.ZOTERO_LIBRARY_ID }} --collection "${COLLECTIONS[$i]}" --output-format html --output-file "${ZOTERO_OUTPUT_FILES[$i]}" --service-account-file "${GDRIVE_AUTH}" --notice "${ZOTERO_COPYRIGHT_NOTICE}"
+            python3 list-zotero-collection.py --api-key ${{ secrets.ZOTERO_API_KEY }} --library-id ${{ secrets.ZOTERO_LIBRARY_ID }} --collection "${ZOTERO_COLLECTIONS[$i]}" --output-format html --output-file "${ZOTERO_OUTPUT_FILES[$i]}" --service-account-file "${GDRIVE_AUTH}" --notice "${ZOTERO_COPYRIGHT_NOTICE}"
           done
           cd ..
 
